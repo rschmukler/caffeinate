@@ -43,6 +43,7 @@ fn main() {
     let matches = App::new("caffeinate")
         .version("1.0")
         .about("Keeping xidlehook woke since 2019")
+        .after_help("If multiple triggers are specified, caffeinate will exit after the first one is fired")
         .arg(
             Arg::with_name("socket")
                 .short("s")
