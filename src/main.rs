@@ -1,5 +1,3 @@
-#![feature(async_await)]
-
 use clap::{value_t_or_exit, App, Arg};
 
 mod client;
@@ -9,9 +7,11 @@ use crossbeam_channel::{after, bounded, never, select, Receiver};
 use std::time::Duration;
 use std::path::Path;
 use std::thread;
+use std::str::FromStr;
+use std::io;
 
 fn ctrl_channel() -> Result<Receiver<()>, ctrlc::Error> {
-    let (sender, receiver) = bounded(2);
+    let (sender, receiver) = bounded(0);
     ctrlc::set_handler(move || {
         let _ = sender.send(());
     })?;
@@ -20,7 +20,7 @@ fn ctrl_channel() -> Result<Receiver<()>, ctrlc::Error> {
 }
 
 fn pid_channel(pid: u64) -> Option<Receiver<()>> {
-    let (sender, receiver) = bounded(1);
+    let (sender, receiver) = bounded(0);
     let path_str: String = format!("/proc/{:?}", pid);
     let path = Path::new(&path_str);
     if !path.exists() {
@@ -39,10 +39,57 @@ fn pid_channel(pid: u64) -> Option<Receiver<()>> {
     Some(receiver)
 }
 
+enum Error {
+    InvalidArgument(String)
+}
+
+#[derive(PartialEq)]
+enum QuitAction {
+    Nothing,
+    Suspend,
+    Shutdown,
+    Restart
+}
+
+impl QuitAction {
+    fn perform(self) -> Result<(), io::Error> {
+        if self == Self::Nothing {
+            return Ok(())
+        }
+
+        let arg =
+            match self {
+                Self::Suspend => "suspend",
+                Self::Restart => "reboot",
+                Self::Shutdown => "poweroff",
+                Self::Nothing => unreachable!()
+            };
+
+        std::process::Command::new("systemctl")
+            .arg(arg)
+            .spawn()
+            .map(|_| ())
+    }
+}
+
+impl FromStr for QuitAction {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "nothing" => Ok(Self::Nothing),
+            "suspend" => Ok(Self::Suspend),
+            "shutdown" => Ok(Self::Shutdown),
+            "restart" => Ok(Self::Restart),
+            _ => Err(Error::InvalidArgument(s.to_owned()))
+        }
+    }
+}
+
 fn main() {
     let matches = App::new("caffeinate")
         .version("1.0")
-        .about("Keeping xidlehook woke since 2019")
+        .about("Keeping xidlehook woke")
         .after_help("If multiple triggers are specified, caffeinate will exit after the first one is fired")
         .arg(
             Arg::with_name("socket")
@@ -68,6 +115,21 @@ fn main() {
                 .help("Wait for a process to quit")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("screen-off")
+                .short("o")
+                .long("screen-off")
+                .takes_value(false)
+                .help("Turns the screen off on start"),
+        )
+        .arg(
+            Arg::with_name("quit")
+                .short("q")
+                .long("quit")
+                .value_name("SHUTDOWN")
+                .default_value("nothing")
+                .help("action to perform upon quit [shutdown|suspend|restart|nothing]"),
+        )
         .get_matches();
 
     let socket = matches.value_of("socket").expect("no socket path provided");
@@ -82,10 +144,6 @@ fn main() {
     };
 
     let ctrl_c_event = ctrl_channel().expect("Error wiring up ctrl-c listener");
-    client
-        .send(Command::Disable)
-        .expect("error communicating with xidlehook");
-
     let (pid_event, pid) = if matches.is_present("pid") {
         let pid = value_t_or_exit!(matches, "pid", u64);
         let pid_event = pid_channel(pid).expect(&format!("Process with pid {:?} does not exist", pid));
@@ -93,6 +151,18 @@ fn main() {
     } else {
         (never(), None)
     };
+
+    let quit_action = value_t_or_exit!(matches, "quit", QuitAction);
+
+    client
+        .send(Command::Disable)
+        .expect("error communicating with xidlehook");
+
+    if matches.is_present("screen-off") {
+        std::process::Command::new("xset")
+            .args(&["dpms","force","off"])
+            .spawn().map(|_| ()).expect("Error powering off display");
+    }
 
     select! {
         recv(timer_event) -> _ => {
@@ -109,4 +179,6 @@ fn main() {
     client
         .send(Command::Enable)
         .expect("error communicating with xidlehook");
+
+    quit_action.perform().expect("Error performing quit action");
 }
