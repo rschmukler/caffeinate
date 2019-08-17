@@ -3,41 +3,12 @@ use clap::{value_t_or_exit, App, Arg};
 mod client;
 
 use client::{Command, XIdleHookClient};
-use crossbeam_channel::{after, bounded, never, select, Receiver};
-use std::time::Duration;
-use std::path::Path;
-use std::thread;
+use crossbeam_channel::{never, select};
 use std::str::FromStr;
 use std::io;
 
-fn ctrl_channel() -> Result<Receiver<()>, ctrlc::Error> {
-    let (sender, receiver) = bounded(0);
-    ctrlc::set_handler(move || {
-        let _ = sender.send(());
-    })?;
+mod trigger;
 
-    Ok(receiver)
-}
-
-fn pid_channel(pid: u64) -> Option<Receiver<()>> {
-    let (sender, receiver) = bounded(0);
-    let path_str: String = format!("/proc/{:?}", pid);
-    let path = Path::new(&path_str);
-    if !path.exists() {
-        return None
-    }
-    thread::spawn(move ||{
-        let path = Path::new(&path_str);
-        loop {
-            if !path.exists() {
-                sender.send(()).unwrap();
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-    });
-    Some(receiver)
-}
 
 enum Error {
     InvalidArgument(String)
@@ -137,16 +108,15 @@ fn main() {
 
     let timer_event = if matches.is_present("timer") {
         let secs = value_t_or_exit!(matches, "timer", u64);
-        let duration = Duration::new(secs, 0);
-        after(duration)
+        trigger::timer(secs)
     } else {
         never()
     };
 
-    let ctrl_c_event = ctrl_channel().expect("Error wiring up ctrl-c listener");
+    let ctrl_c_event = trigger::ctrl_c().expect("Error wiring up ctrl-c listener");
     let (pid_event, pid) = if matches.is_present("pid") {
         let pid = value_t_or_exit!(matches, "pid", u64);
-        let pid_event = pid_channel(pid).expect(&format!("Process with pid {:?} does not exist", pid));
+        let pid_event = trigger::pid(pid).expect(&format!("Process with pid {:?} does not exist", pid));
         (pid_event, Some(pid))
     } else {
         (never(), None)
