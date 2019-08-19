@@ -2,11 +2,12 @@ use std::io::{self, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
+#[repr(u8)]
 pub enum Command {
-    Disable,
-    Enable,
+    Disable = 0,
+    Enable = 1,
     #[allow(dead_code)]
-    TriggerNow,
+    TriggerNow = 2,
 }
 
 pub struct XIdleHookClient {
@@ -23,13 +24,6 @@ impl XIdleHookClient {
 
     /// Sends the specified command to the XIdleHook socket
     pub fn send(&mut self, cmd: Command) -> Result<(), io::Error> {
-        use Command::*;
-        let byte = match cmd {
-            Disable => 0x00_u8,
-            Enable => 0x01_u8,
-            TriggerNow => 0x02_u8,
-        };
-
-        self.stream.write(&[byte]).map(|_| ())
+        self.stream.write(&[cmd as u8]).map(|_| ())
     }
 }
