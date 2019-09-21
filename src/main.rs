@@ -134,21 +134,27 @@ fn main() {
             .spawn().map(|_| ()).expect("Error powering off display");
     }
 
-    select! {
-        recv(timer_event) -> _ => {
-            println!("Times up! Goodbye");
-        }
-        recv(pid_event) -> _ => {
-            println!("Process {:?} exited...", pid);
-        }
-        recv(ctrl_c_event) -> _ => {
-            println!("Shutting down...");
-        }
-    }
+    let is_interrupt_quit =
+        select! {
+            recv(timer_event) -> _ => {
+                println!("Times up! Goodbye");
+                false
+            }
+            recv(pid_event) -> _ => {
+                println!("Process {:?} exited...", pid);
+                false
+            }
+            recv(ctrl_c_event) -> _ => {
+                println!("Shutting down...");
+                true
+            }
+        };
 
     client
         .send(Command::Enable)
         .expect("error communicating with xidlehook");
 
-    quit_action.perform().expect("Error performing quit action");
+    if !is_interrupt_quit {
+        quit_action.perform().expect("Error performing quit action");
+    }
 }
